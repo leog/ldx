@@ -1,7 +1,10 @@
 {
   "name": "ldx",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "ldx.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "bin": {
     "ldx": "ldx.js"
   },
@@ -32,9 +35,15 @@
   "devDependencies": {
     "@vitest/coverage-v8": "3.0.9",
     "mock-require": "^3.0.3",
+    "standard-version": "^9.5.0",
     "vitest": "^3.0.9"
   },
   "scripts": {
-    "test": "vitest --coverage"
+    "test": "vitest --coverage",
+    "release": "standard-version",
+    "release:minor": "standard-version --release-as minor",
+    "release:major": "standard-version --release-as major",
+    "release:patch": "standard-version --release-as patch",
+    "release:first": "standard-version --first-release"
   }
 }

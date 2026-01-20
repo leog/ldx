@@ -62,7 +62,7 @@ describe("processOutput", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  test("handles function errors gracefully", async () => {
+  test("handles function errors gracefully and returns original line", async () => {
     const errorFn = vi.fn(() => {
       throw new Error("Test error");
     });
@@ -70,9 +70,9 @@ describe("processOutput", () => {
       "Error match": errorFn,
     });
     const { processOutput } = await import("./ldx.js");
-    const line = "Error match";
+    const line = "Error match with extra text";
     const result = processOutput(line);
-    expect(result).toBeUndefined();
+    expect(result).toBe(line); // Returns original line on error
     expect(errorFn).toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalledWith(
       "LDX: provided function errored: ",
@@ -202,5 +202,171 @@ describe("executeAndProcessCommand", () => {
     await executeAndProcessCommand();
 
     expect(logSpy).toHaveBeenCalledWith("✅ Processed output");
+  });
+
+  test("processes stderr output correctly", async () => {
+    mock("./ldx.config.js", {
+      "Error:": "Transformed error message",
+    });
+
+    vi.spyOn(process, "argv", "get").mockReturnValue([
+      "node",
+      "ldx.js",
+      "somecommand",
+    ]);
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const mockSpawn = vi.fn(() => ({
+      stdout: { on: vi.fn() },
+      stderr: {
+        on: vi.fn((event, callback) => {
+          if (event === "data") {
+            callback(Buffer.from("Error: something went wrong\n"));
+          }
+        }),
+      },
+      on: vi.fn((event, callback) => {
+        if (event === "close") callback(0);
+      }),
+    }));
+    vi.spyOn(require("child_process"), "spawn").mockImplementation(mockSpawn);
+
+    const { executeAndProcessCommand } = await import("./ldx.js");
+    await executeAndProcessCommand();
+
+    expect(errorSpy).toHaveBeenCalledWith("Transformed error message");
+    errorSpy.mockRestore();
+  });
+
+  test("passes through unmatched stderr lines", async () => {
+    mock("./ldx.config.js", {
+      "Something else": "Not this",
+    });
+
+    vi.spyOn(process, "argv", "get").mockReturnValue([
+      "node",
+      "ldx.js",
+      "somecommand",
+    ]);
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const mockSpawn = vi.fn(() => ({
+      stdout: { on: vi.fn() },
+      stderr: {
+        on: vi.fn((event, callback) => {
+          if (event === "data") {
+            callback(Buffer.from("Unmatched error line\n"));
+          }
+        }),
+      },
+      on: vi.fn((event, callback) => {
+        if (event === "close") callback(0);
+      }),
+    }));
+    vi.spyOn(require("child_process"), "spawn").mockImplementation(mockSpawn);
+
+    const { executeAndProcessCommand } = await import("./ldx.js");
+    await executeAndProcessCommand();
+
+    expect(errorSpy).toHaveBeenCalledWith("Unmatched error line");
+    errorSpy.mockRestore();
+  });
+
+  test("rejects when spawn fails with error event", async () => {
+    vi.spyOn(process, "argv", "get").mockReturnValue([
+      "node",
+      "ldx.js",
+      "nonexistentcommand",
+    ]);
+
+    const mockSpawn = vi.fn(() => {
+      const emitter = {
+        stdout: { on: vi.fn() },
+        stderr: { on: vi.fn() },
+        on: vi.fn((event, callback) => {
+          if (event === "error") {
+            setTimeout(() => callback(new Error("spawn nonexistentcommand ENOENT")), 0);
+          }
+        }),
+      };
+      return emitter;
+    });
+    vi.spyOn(require("child_process"), "spawn").mockImplementation(mockSpawn);
+
+    const { executeAndProcessCommand } = await import("./ldx.js");
+    await expect(executeAndProcessCommand()).rejects.toThrow(
+      "Failed to start command: spawn nonexistentcommand ENOENT"
+    );
+  });
+});
+
+describe("validateConfig", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mock.stopAll();
+  });
+
+  test("returns valid for correct configuration", async () => {
+    mock("./ldx.config.js", {
+      "key1": "value1",
+      "key2": (line) => line,
+    });
+    const { validateConfig } = await import("./ldx.js");
+    const result = validateConfig({
+      "key1": "value1",
+      "key2": (line) => line,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  test("returns invalid for null configuration", async () => {
+    mock("./ldx.config.js", { "key": "value" });
+    const { validateConfig } = await import("./ldx.js");
+    const result = validateConfig(null);
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("Configuration must be a non-null object.");
+  });
+
+  test("returns invalid for array configuration", async () => {
+    mock("./ldx.config.js", { "key": "value" });
+    const { validateConfig } = await import("./ldx.js");
+    const result = validateConfig(["item1", "item2"]);
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("Configuration must be a non-null object.");
+  });
+
+  test("returns invalid for empty configuration", async () => {
+    mock("./ldx.config.js", { "key": "value" });
+    const { validateConfig } = await import("./ldx.js");
+    const result = validateConfig({});
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("Configuration cannot be empty.");
+  });
+
+  test("returns invalid for configuration with invalid value type", async () => {
+    mock("./ldx.config.js", { "key": "value" });
+    const { validateConfig } = await import("./ldx.js");
+    const result = validateConfig({
+      "validKey": "validValue",
+      "invalidKey": 12345,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe(
+      'Invalid value type for key "invalidKey". Expected string or function, got number.'
+    );
+  });
+
+  test("returns invalid for configuration with object value", async () => {
+    mock("./ldx.config.js", { "key": "value" });
+    const { validateConfig } = await import("./ldx.js");
+    const result = validateConfig({
+      "key": { nested: "object" },
+    });
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe(
+      'Invalid value type for key "key". Expected string or function, got object.'
+    );
   });
 });

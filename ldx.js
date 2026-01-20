@@ -13,6 +13,35 @@ try {
   process.exit(1);
 }
 
+// Validate configuration
+function validateConfig(cfg) {
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
+    return { valid: false, error: "Configuration must be a non-null object." };
+  }
+
+  const entries = Object.entries(cfg);
+  if (entries.length === 0) {
+    return { valid: false, error: "Configuration cannot be empty." };
+  }
+
+  for (const [key, value] of entries) {
+    if (typeof value !== "string" && typeof value !== "function") {
+      return {
+        valid: false,
+        error: `Invalid value type for key "${key}". Expected string or function, got ${typeof value}.`,
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
+const validation = validateConfig(config);
+if (!validation.valid) {
+  console.error(`LDX: Configuration error - ${validation.error}`);
+  process.exit(1);
+}
+
 console.log(
   "Thank you for using LDX! Collaborate or report issues at https://github.com/leog/ldx \n"
 );
@@ -28,6 +57,11 @@ function executeAndProcessCommand() {
 
     const child = spawn(command[0], command.slice(1));
 
+    // Handle spawn errors (e.g., command not found)
+    child.on("error", (error) => {
+      reject(new Error(`Failed to start command: ${error.message}`));
+    });
+
     // Handle stdout
     if (child.stdout) {
       child.stdout.on("data", (data) => {
@@ -36,6 +70,21 @@ function executeAndProcessCommand() {
           const processedLine = processOutput(line);
           if (processedLine) {
             console.log(processedLine); // Output the processed line
+          }
+        });
+      });
+    }
+
+    // Handle stderr
+    if (child.stderr) {
+      child.stderr.on("data", (data) => {
+        const lines = data.toString().split("\n");
+        lines.forEach((line) => {
+          const processedLine = processOutput(line);
+          if (processedLine) {
+            console.error(processedLine); // Output processed error line to stderr
+          } else if (line.trim()) {
+            console.error(line); // Pass through unmatched non-empty lines
           }
         });
       });
@@ -65,13 +114,13 @@ function processOutput(line) {
       return value;
     }
 
-    // Handle array values
+    // Handle function values
     if (typeof value === "function") {
       try {
         return value(line);
       } catch (e) {
         console.warn("LDX: provided function errored: ", e.message);
-        return undefined;
+        return line; // Return original line on error to prevent data loss
       }
     }
 
@@ -89,6 +138,7 @@ function processOutput(line) {
 module.exports = {
   processOutput,
   executeAndProcessCommand,
+  validateConfig,
 };
 
 // Execute the command if this script is run directly
